@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     mt5_path: str = ""
     mt5_timeout_ms: int = 60000
 
-    symbols: str = "EURUSDm,GBPUSDm,USDJPYm,XAUUSDm"
+    symbols: str = "EURUSDm,GBPUSDm,USDJPYm,XAUUSDm,AUDUSDm,USDCADm,USDCHFm,NZDUSDm"
     timeframes: str = "H1,H4,D1"
     magic_number: int = 240910
     dry_run: bool = True
