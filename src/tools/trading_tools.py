@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field
 from typing import Any
 
+from pydantic import BaseModel, Field
+
+from ..agent.state import Candidate
 from ..config import Settings
 from ..journal.store import Journal
 from ..mt5_client.client import MT5Client
@@ -8,7 +10,6 @@ from ..mt5_client.enums import NAME_TO_TIMEFRAME
 from ..mt5_client.models import MarketOrderRequest
 from ..risk.engine import RiskEngine
 from ..strategy.stops import analyze_symbol, plan_stops
-from ..agent.state import Candidate
 
 
 class AccountSummary(BaseModel):
