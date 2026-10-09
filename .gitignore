@@ -11,3 +11,10 @@ wheels/
 
 # variables
 .env
+.env.local
+
+# runtime
+logs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
