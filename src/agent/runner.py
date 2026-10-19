@@ -38,8 +38,8 @@ def run_once(
     except Exception as exc:
         reason = f"Run failed safely: {exc}"
     log.info("no_trade", reason=reason)
-    journal.append(JournalEntry(symbol=",".join(names), action="NO_TRADE", reason=reason, dry_run=True))
-    return TradeDecision(action="NO_TRADE", reason=reason, dry_run=True)
+    journal.append(JournalEntry(symbol=",".join(names), action="NO_TRADE", reason=reason, dry_run=dry))
+    return TradeDecision(action="NO_TRADE", reason=reason, dry_run=dry)
 
 
 def _symbol_list(symbols: list[str] | str | None, active: Settings) -> list[str]:
@@ -53,5 +53,5 @@ def _first_decision(result: object, names: list[str], dry: bool, journal: Journa
         raw = result.get("decision", {})
         if isinstance(raw, dict) and raw.get("action") in ("EXECUTE", "NO_TRADE"):
             return TradeDecision.model_validate({**raw, "dry_run": dry})
-    journal.append(JournalEntry(symbol=",".join(names), action="NO_TRADE", reason=fallback, dry_run=True))
-    return TradeDecision(action="NO_TRADE", reason=fallback, dry_run=True)
+    journal.append(JournalEntry(symbol=",".join(names), action="NO_TRADE", reason=fallback, dry_run=dry))
+    return TradeDecision(action="NO_TRADE", reason=fallback, dry_run=dry)

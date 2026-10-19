@@ -21,14 +21,15 @@ class TradeDecision(BaseModel):
     dry_run: bool = True
 
     def describe(self) -> str:
+        mode = "PAPER" if self.dry_run else "LIVE"
         if self.action == "EXECUTE":
             return (
-                f"TRADE DECISION: EXECUTE\nSymbol: {self.symbol}\nDirection: {self.side}\n"
+                f"TRADE DECISION: EXECUTE [{mode}]\nSymbol: {self.symbol}\nDirection: {self.side}\n"
                 f"Volume: {self.volume} lots\nStop: {self.sl_pips:.1f} pips @ {self.sl_price}\n"
                 f"Take: {self.tp_pips:.1f} pips @ {self.tp_price}\nReason: {self.reason}\n"
                 f"Outcome: {self.outcome or 'not executed'}"
             )
-        return f"TRADE DECISION: NO TRADE\nReason: {self.reason}"
+        return f"TRADE DECISION: NO TRADE [{mode}]\nReason: {self.reason}"
 
 
 class Candidate(BaseModel):

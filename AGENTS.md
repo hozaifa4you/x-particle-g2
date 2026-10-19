@@ -6,7 +6,7 @@ Read this file before any code, trade-logic, or docs change. It is the source of
 
 Conservative AI forex trader. A LangGraph agent proposes, a typed risk engine disposes, and `mt5-wrapper` executes against a MetaTrader 5 terminal.
 
-Flow: `main.py` (typer CLI) loads `src/config.py` (pydantic-settings), opens `mt5_session()`, runs the five-node graph (`health → analyze → validate → decide → execute`), and appends every outcome to the JSONL journal. Paper mode is the default. Live orders only happen with `DRY_RUN=false` plus a passing gate.
+Flow: `main.py` (typer CLI) loads `src/config.py` (pydantic-settings), opens `mt5_session()`, runs the five-node graph (`health → analyze → validate → decide → execute`), and appends every outcome to the JSONL journal. Paper mode is the default. Live orders only happen with `DRY_RUN=false` plus a passing gate. The CLI's `--dry-run` can only force paper mode; never add a flag that forces live.
 
 ## 2. Model policy
 

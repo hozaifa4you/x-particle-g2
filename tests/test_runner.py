@@ -34,6 +34,23 @@ def test_offline_run_writes_no_trade(tmp_path: Path) -> None:
     assert (tmp_path / "history.jsonl").exists()
 
 
+@pytest.mark.parametrize(
+    ("env_dry_run", "forced", "expected"),
+    [(True, None, True), (False, None, False), (False, True, True)],
+)
+def test_mode_follows_env_unless_forced_to_paper(
+    tmp_path: Path, env_dry_run: bool, forced: bool | None, expected: bool
+) -> None:
+    backend = FakeBackend()
+    backend.connect_ok = False
+    path = tmp_path / "history.jsonl"
+    active = make_settings(dry_run=env_dry_run, journal_path=str(path), openrouter_api_key="")
+    decision = run_once(symbols="EURUSD", dry_run=forced, active=active, backend=backend)  # type: ignore[arg-type]
+    assert decision.dry_run is expected
+    assert ("[PAPER]" if expected else "[LIVE]") in decision.describe()
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[-1])["dry_run"] is expected
+
+
 def test_journal_filters_today(tmp_path: Path) -> None:
     journal = Journal(str(tmp_path / "j.jsonl"))
     journal.append(JournalEntry(symbol="EURUSD", action="EXECUTE", reason="t", dry_run=True))

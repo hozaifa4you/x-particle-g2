@@ -23,6 +23,7 @@ Copy-Item .env.example .env
 | `MT5_PATH` | Full path to your terminal's `terminal64.exe`. The terminal is started if it is not running. |
 | `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER` | Leave all three empty to use the account already logged in to the terminal, or fill all three. |
 | `SYMBOLS` | Exact names from your broker's Market Watch. Exness Standard uses `EURUSDm`; Raw Spread uses `EURUSD`. |
+| `DRY_RUN` | `true` (default) = paper mode, no orders sent. `false` = live: real orders to the logged-in account. |
 | `COMMISSION_PER_LOT` | Round-turn commission per 1.0 lot. Exness Raw Spread charges up to 3.50 per side, so `7.0`. Use `0` on spread-only accounts. |
 | `OPENROUTER_API_KEY` | Optional. When empty, runs skip the LLM step. |
 
@@ -30,19 +31,21 @@ Every other setting already has a conservative default; see [Conservative rules]
 
 ## Running it
 
-Every command runs in paper mode unless you pass `--no-dry-run`. The CLI does not read `DRY_RUN` from `.env`.
+`DRY_RUN` in `.env` decides the mode. `--dry-run` forces paper mode for one command even when `DRY_RUN=false`. No flag can force live mode: going live only happens by setting `DRY_RUN=false`. Every decision line shows the mode it ran in, `[PAPER]` or `[LIVE]`.
 
-**One paper run.** Analyzes and validates, journals the decision, and sends nothing:
+**One run.** Analyzes, validates, and journals the decision. In paper mode nothing is sent:
 
 ```powershell
-uv run python main.py once --symbols EURUSD   # one symbol
+uv run python main.py once --symbols EURUSD   # one symbol, mode from DRY_RUN
 uv run python main.py once                    # every symbol in SYMBOLS
+uv run python main.py once --dry-run          # paper, whatever DRY_RUN says
 ```
 
-**Paper loop.** Repeats `once` every `--interval-min` minutes (5 to 240, default 30). Stop it with `Ctrl+C`:
+**Loop.** Repeats `once` every `--interval-min` minutes (5 to 240, default 30). Stop it with `Ctrl+C`:
 
 ```powershell
 uv run python main.py loop --interval-min 30
+uv run python main.py loop --dry-run          # paper loop while DRY_RUN=false
 ```
 
 **Market snapshot.** Prints trend, RSI, ATR, and the number of up candles among the last 100 bars. It does not simulate trades:
@@ -51,18 +54,17 @@ uv run python main.py loop --interval-min 30
 uv run python main.py backtest --symbol EURUSD --timeframe H1 --count 500
 ```
 
-**Live trading.** Sends real orders to the logged-in account. Do this only after paper runs on a demo look steady. First turn on **Algo Trading** in the terminal; otherwise MT5 rejects orders with retcode 10027 (`CLIENT_DISABLES_AT`).
+**Live trading.** Sends real orders to the logged-in account. Do this only after paper runs on a demo look steady. Before you start:
 
-```powershell
-uv run python main.py once --no-dry-run
-uv run python main.py loop --no-dry-run --interval-min 30
-```
+1. Turn on **Algo Trading** in the terminal. Otherwise MT5 rejects orders with retcode 10027 (`CLIENT_DISABLES_AT`).
+2. Check which account the terminal is logged in to. Live mode trades whatever account that is.
+3. Set `DRY_RUN=false` in `.env`, then use the same `once` or `loop` commands without `--dry-run`.
 
-Live orders still pass every risk gate first.
+Live orders still pass every risk gate first. Set `DRY_RUN=true` again to stop sending orders.
 
 ### Reading the output
 
-Expect `TRADE DECISION: NO TRADE` on most runs. That is by design: the agent waits until every timeframe in `TIMEFRAMES` (H1/H4/D1 by default) points the same way, the spread is sane, and the reward is validated. The reason line says which check stopped it.
+Expect `TRADE DECISION: NO TRADE [PAPER]` (or `[LIVE]`) on most runs. That is by design: the agent waits until every timeframe in `TIMEFRAMES` (H1/H4/D1 by default) points the same way, the spread is sane, and the reward is validated. The reason line says which check stopped it.
 
 When a setup passes, you get `TRADE DECISION: EXECUTE` with symbol, direction, volume, stop and take in pips and price, and an `Outcome:` line:
 
