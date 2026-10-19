@@ -34,7 +34,7 @@ def loop(
 
 @app.command()
 def backtest(
-    symbol: str = typer.Option("EURUSDm"),
+    symbol: str = typer.Option("EURUSD"),
     timeframe: str = typer.Option("H1"),
     count: int = typer.Option(500, min=100, max=5000),
 ) -> None:

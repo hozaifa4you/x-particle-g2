@@ -11,7 +11,7 @@ def conservative() -> RiskEngine:
 
 def spec() -> SymbolSpec:
     return SymbolSpec(
-        name="EURUSDm", digits=5, point=0.00001, bid=1.1000, ask=1.1002,
+        name="EURUSD", digits=5, point=0.00001, bid=1.1000, ask=1.1002,
         volume_min=0.01, volume_max=5.0, volume_step=0.01,
         tick_value=1.0, tick_size=0.00001,
     )

@@ -81,14 +81,14 @@ def client() -> MT5Client:
 
 
 def test_empty_rates_become_empty_list() -> None:
-    assert client().candles("EURUSDm", __import__("src.mt5_client.enums", fromlist=["Timeframe"]).Timeframe.H1) == []
+    assert client().candles("EURUSD", __import__("src.mt5_client.enums", fromlist=["Timeframe"]).Timeframe.H1) == []
 
 
 def test_send_market_normalizes_and_sends() -> None:
     handle = client()
-    spec = handle.symbol("EURUSDm")
+    spec = handle.symbol("EURUSD")
     result = handle.send_market(
-        MarketOrderRequest(symbol="EURUSDm", side="BUY", volume=0.333, sl_price=1.098, tp_price=1.104),
+        MarketOrderRequest(symbol="EURUSD", side="BUY", volume=0.333, sl_price=1.098, tp_price=1.104),
         spec,
     )
     assert result.ok and result.retcode == int(Retcode.DONE)
@@ -101,9 +101,9 @@ def test_rejected_check_raises() -> None:
         return SimpleNamespace(retcode=10016, comment="invalid stops")
 
     handle._backend.order_check = bad_check  # type: ignore[attr-defined]
-    spec = handle.symbol("EURUSDm")
+    spec = handle.symbol("EURUSD")
     try:
-        handle.send_market(MarketOrderRequest(symbol="EURUSDm", side="BUY", volume=0.1), spec)
+        handle.send_market(MarketOrderRequest(symbol="EURUSD", side="BUY", volume=0.1), spec)
     except MT5Error as exc:
         assert "order_check" in str(exc)
     else:

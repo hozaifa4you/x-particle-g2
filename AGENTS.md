@@ -61,4 +61,4 @@ Flow: `main.py` (typer CLI) loads `src/config.py` (pydantic-settings), opens `mt
 
 ## 9. Before finishing
 
-Run in order and fix instead of silencing: `uv run ruff check .`, `uv run mypy src --strict`, `uv run pytest -q`. Then paper-run `uv run python main.py once --dry-run --symbols EURUSDm` and confirm a typed decision plus a journal entry with no live order. Update `README.md` and `.env.example` whenever settings or flows change.
+Run in order and fix instead of silencing: `uv run ruff check .`, `uv run mypy src --strict`, `uv run pytest -q`. Then paper-run `uv run python main.py once --dry-run --symbols EURUSD` and confirm a typed decision plus a journal entry with no live order. Update `README.md` and `.env.example` whenever settings or flows change.

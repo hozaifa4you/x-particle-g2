@@ -7,7 +7,7 @@ Conservative AI forex trader. A LangGraph agent plans, a typed risk engine allow
 ```bash
 cp .env.example .env
 uv sync
-python main.py trade once --dry-run --symbols EURUSDm
+python main.py trade once --dry-run --symbols EURUSD
 ```
 
 Expect `TRADE DECISION: NO TRADE` most runs. That is the design: the agent waits for aligned H1/H4/D1 trends, sane spreads, and validated reward.
@@ -40,7 +40,7 @@ print([r for r in rows[-5:]])
 ```
 
 ```bash
-python main.py backtest --symbol EURUSDm --timeframe H1 --count 500
+python main.py backtest --symbol EURUSD --timeframe H1 --count 500
 ```
 
 ## Checks

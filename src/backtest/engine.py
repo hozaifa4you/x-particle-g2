@@ -4,7 +4,7 @@ from ..mt5_client.enums import NAME_TO_TIMEFRAME
 from ..strategy.stops import analyze_symbol
 
 
-def summarize(symbol: str = "EURUSDm", timeframe: str = "H1", count: int = 500) -> str:
+def summarize(symbol: str = "EURUSD", timeframe: str = "H1", count: int = 500) -> str:
     frame = NAME_TO_TIMEFRAME.get(timeframe.upper())
     if frame is None:
         return f"Unknown timeframe {timeframe}"
