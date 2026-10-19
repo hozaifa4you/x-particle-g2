@@ -66,6 +66,10 @@ Live orders still pass every risk gate first. Set `DRY_RUN=true` again to stop s
 
 Expect `TRADE DECISION: NO TRADE [PAPER]` (or `[LIVE]`) on most runs. That is by design: the agent waits until every timeframe in `TIMEFRAMES` (H1/H4/D1 by default) points the same way, the spread is sane, and the reward is validated. The reason line says which check stopped it.
 
+The reason has two parts. Everything before `| LLM:` comes from the risk engine and lists every symbol checked. That part is the decision. Text after `| LLM:` is the model's commentary. The model sees the same limits as your `.env`, but it only advises: it can veto a trade, never approve one.
+
+Trend comes from EMA50 versus EMA200 on each timeframe. A value of `{'H1': 'BULLISH', 'H4': 'BEARISH', 'D1': 'BEARISH'}` means H1 is pulling back inside a higher-timeframe downtrend. The agent waits until all three agree.
+
 When a setup passes, you get `TRADE DECISION: EXECUTE` with symbol, direction, volume, stop and take in pips and price, and an `Outcome:` line:
 
 - `paper: order not sent` in paper mode.

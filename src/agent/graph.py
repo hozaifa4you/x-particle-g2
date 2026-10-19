@@ -67,7 +67,7 @@ def build_graph(toolkit: "Toolkit", symbols: list[str], dry_run: bool) -> Any:
         picked = state.get("decision") or {}
         if not picked:
             choice = TradeDecision(
-                action="NO_TRADE", reason="; ".join(notes[-4:]) or "No aligned setup", dry_run=dry_run
+                action="NO_TRADE", reason="; ".join(notes) or "No aligned setup", dry_run=dry_run
             )
         else:
             candidate = Candidate.model_validate(picked)
@@ -127,7 +127,7 @@ def _llm_refine(active: Settings, symbols: list[str], notes: list[str], fallback
             model=active.openrouter_model,
             temperature=0,
         ).with_structured_output(DecisionSchema, method="json_schema")
-        prompt = build_system_prompt(symbols) + "\nNotes:\n" + "\n".join(notes[-12:])
+        prompt = build_system_prompt(symbols, active) + "\nNotes:\n" + "\n".join(notes)
         answer = llm.invoke(prompt)
     except Exception as exc:
         # The LLM only advises; the deterministic decision stands, but the failure must stay visible.

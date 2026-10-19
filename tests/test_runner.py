@@ -11,9 +11,10 @@ from src.agent.graph import build_graph
 from src.agent.runner import run_once
 from src.journal.store import Journal, JournalEntry
 from src.mt5_client.client import MT5Client
+from src.mt5_client.models import Candle
 from src.risk.engine import RiskEngine
 from src.tools.trading_tools import Toolkit
-from tests.helpers import FakeBackend, as_rows, make_settings, trend_candles
+from tests.helpers import FakeBackend, as_rows, flat_candles, make_settings, trend_candles
 
 WEDNESDAY = datetime(2026, 1, 7, 10, 0, tzinfo=UTC)
 
@@ -64,16 +65,27 @@ def test_journal_stamps_each_entry_when_created() -> None:
     assert JournalEntry().time >= before
 
 
-def run_graph(tmp_path: Path, dry_run: bool) -> tuple[dict[str, Any], FakeBackend, list[dict[str, Any]]]:
+def run_graph(
+    tmp_path: Path, dry_run: bool, symbols: list[str] | None = None, candles: list[Candle] | None = None
+) -> tuple[dict[str, Any], FakeBackend, list[dict[str, Any]]]:
+    names = symbols or ["EURUSD"]
     backend = FakeBackend()
-    backend.rates = as_rows(trend_candles(250))
+    backend.rates = as_rows(candles or trend_candles(250))
     active = make_settings(journal_path=str(tmp_path / "j.jsonl"), openrouter_api_key="", dry_run=dry_run)
     client = MT5Client(active, backend=backend)  # type: ignore[arg-type]
     client.connect()
     toolkit = Toolkit(client, active, RiskEngine(active, clock=lambda: WEDNESDAY), Journal(active.journal_path))
-    result = build_graph(toolkit, ["EURUSD"], dry_run).invoke({"symbols": ["EURUSD"], "dry_run": dry_run})
+    result = build_graph(toolkit, names, dry_run).invoke({"symbols": names, "dry_run": dry_run})
     lines = (tmp_path / "j.jsonl").read_text(encoding="utf-8").splitlines()
     return result["decision"], backend, [json.loads(line) for line in lines]
+
+
+def test_no_trade_reason_lists_every_symbol(tmp_path: Path) -> None:
+    # The reason used to keep only the last four notes, hiding earlier symbols.
+    names = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD"]
+    decision, _, _ = run_graph(tmp_path, dry_run=True, symbols=names, candles=flat_candles(250))
+    assert decision["action"] == "NO_TRADE"
+    assert [name for name in names if f"{name}: no alignment" not in decision["reason"]] == []
 
 
 def test_paper_run_executes_without_sending(tmp_path: Path) -> None:

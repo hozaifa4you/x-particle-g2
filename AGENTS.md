@@ -30,7 +30,7 @@ Flow: `main.py` (typer CLI) loads `src/config.py` (pydantic-settings), opens `mt
 - `src/strategy/` — pure functions on `list[Candle]`: EMA, RSI, MACD, ATR, Bollinger, support/resistance, `plan_stops()`. No network, no filesystem.
 - `src/risk/` — `RiskEngine` (`size_volume`, `check_account`, `check_timing`, `check_setup`) plus session helpers. Tick-value sizing floored to the lot step, commission-adjusted reward, post-entry margin, closed-plus-open daily loss, cooldown/session gates.
 - `src/tools/trading_tools.py` — `Toolkit` plus at most eight LangChain `StructuredTool`s. Tools report; they do not authorize.
-- `src/agent/` — `state.py` (`TradeDecision`, `AgentState`), `prompt.py` (`build_system_prompt()`), `graph.py` (five nodes), `runner.py` (`run_once()` with offline `NO_TRADE` fallback).
+- `src/agent/` — `state.py` (`TradeDecision`, `AgentState`), `prompt.py` (`build_system_prompt(symbols, settings)`; every number comes from `Settings`, and it never mentions checks the engine does not run), `graph.py` (five nodes), `runner.py` (`run_once()` with offline `NO_TRADE` fallback).
 - `src/journal/store.py` — JSONL append, `today_entries()`, `last_trade_time()`. The sole source for daily counts and cooldowns.
 - `src/backtest/engine.py` — needs a live terminal; reports trend/RSI/ATR without placing orders.
 - `tests/` — behavior pins for sizing, gates, retcodes, journal, and offline runner.
