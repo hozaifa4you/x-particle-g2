@@ -2,15 +2,85 @@
 
 Conservative AI forex trader. A LangGraph agent plans, a typed risk engine allows, and `mt5-wrapper` executes.
 
-## Quick start
+## Requirements
 
-```bash
-cp .env.example .env
-uv sync
-uv run python main.py once --dry-run --symbols EURUSD
+- Windows. `mt5-wrapper` imports the `MetaTrader5` package, which only runs on Windows.
+- A MetaTrader 5 terminal installed and logged in to your broker account. Start on a demo account.
+- Python 3.13 and [uv](https://docs.astral.sh/uv/).
+- Optional: an OpenRouter API key. Without one, the deterministic rules make every decision on their own.
+
+## Setup
+
+```powershell
+uv sync --extra dev
+Copy-Item .env.example .env
 ```
 
-Expect `TRADE DECISION: NO TRADE` most runs. That is the design: the agent waits for aligned H1/H4/D1 trends, sane spreads, and validated reward.
+`--extra dev` installs ruff, mypy, and pytest for the checks below. Then edit `.env`:
+
+| Setting | What to put there |
+|---|---|
+| `MT5_PATH` | Full path to your terminal's `terminal64.exe`. The terminal is started if it is not running. |
+| `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER` | Leave all three empty to use the account already logged in to the terminal, or fill all three. |
+| `SYMBOLS` | Exact names from your broker's Market Watch. Exness Standard uses `EURUSDm`; Raw Spread uses `EURUSD`. |
+| `COMMISSION_PER_LOT` | Round-turn commission per 1.0 lot. Exness Raw Spread charges up to 3.50 per side, so `7.0`. Use `0` on spread-only accounts. |
+| `OPENROUTER_API_KEY` | Optional. When empty, runs skip the LLM step. |
+
+Every other setting already has a conservative default; see [Conservative rules](#conservative-rules-enforced-in-code).
+
+## Running it
+
+Every command runs in paper mode unless you pass `--no-dry-run`. The CLI does not read `DRY_RUN` from `.env`.
+
+**One paper run.** Analyzes and validates, journals the decision, and sends nothing:
+
+```powershell
+uv run python main.py once --symbols EURUSD   # one symbol
+uv run python main.py once                    # every symbol in SYMBOLS
+```
+
+**Paper loop.** Repeats `once` every `--interval-min` minutes (5 to 240, default 30). Stop it with `Ctrl+C`:
+
+```powershell
+uv run python main.py loop --interval-min 30
+```
+
+**Market snapshot.** Prints trend, RSI, ATR, and the number of up candles among the last 100 bars. It does not simulate trades:
+
+```powershell
+uv run python main.py backtest --symbol EURUSD --timeframe H1 --count 500
+```
+
+**Live trading.** Sends real orders to the logged-in account. Do this only after paper runs on a demo look steady. First turn on **Algo Trading** in the terminal; otherwise MT5 rejects orders with retcode 10027 (`CLIENT_DISABLES_AT`).
+
+```powershell
+uv run python main.py once --no-dry-run
+uv run python main.py loop --no-dry-run --interval-min 30
+```
+
+Live orders still pass every risk gate first.
+
+### Reading the output
+
+Expect `TRADE DECISION: NO TRADE` on most runs. That is by design: the agent waits until every timeframe in `TIMEFRAMES` (H1/H4/D1 by default) points the same way, the spread is sane, and the reward is validated. The reason line says which check stopped it.
+
+When a setup passes, you get `TRADE DECISION: EXECUTE` with symbol, direction, volume, stop and take in pips and price, and an `Outcome:` line:
+
+- `paper: order not sent` in paper mode.
+- `order sent: order=… deal=… price=…` only when MT5 confirmed the order.
+
+Each run appends one JSON line to `logs/trade_history.jsonl`.
+
+### Common messages
+
+| Message | Meaning |
+|---|---|
+| `MT5 unavailable: MT5 initialize failed` | The terminal could not be reached. Check `MT5_PATH` and that the terminal opens. Run again on a transient `IPC send failed`. |
+| `Cannot select symbol X` | `X` is not in your broker's symbol list. Usually a suffix mismatch in `SYMBOLS`. |
+| `No live quote for X` | No price yet: the market is closed, or the symbol was just added to Market Watch. The next run picks it up. |
+| `Min lot 0.01 risks N%, above the 1.0% limit` | The account is too small for that symbol's stop. Gold on a $500 account always shows this. |
+| `Market closed for off day` / `Friday cutoff passed` | Session rules; no trading on weekends or after 14:00 UTC on Friday. |
+| `LLM skipped: <error>` | OpenRouter failed. The rules still made the decision, and the error is in the log. |
 
 ## How it is organized
 
@@ -43,19 +113,17 @@ Expect `TRADE DECISION: NO TRADE` most runs. That is the design: the agent waits
 
 ## Monitoring
 
-```python
-import json
-rows = [json.loads(line) for line in open("logs/trade_history.jsonl")]
-print([r for r in rows[-5:]])
+Show the last five decisions:
+
+```powershell
+Get-Content logs/trade_history.jsonl -Tail 5
 ```
 
-```bash
-python main.py backtest --symbol EURUSD --timeframe H1 --count 500
-```
+The journal is also the source for the daily trade count and the cooldown, so do not edit or delete it while trading.
 
 ## Checks
 
-```bash
+```powershell
 uv run ruff check .
 uv run mypy src --strict
 uv run pytest -q
