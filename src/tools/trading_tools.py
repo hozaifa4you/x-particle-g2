@@ -2,13 +2,15 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..agent.state import Candidate
+from ..agent.state import Candidate, TradeDecision
 from ..config import Settings
-from ..journal.store import Journal
+from ..journal.store import Journal, JournalEntry
 from ..mt5_client.client import MT5Client
-from ..mt5_client.enums import NAME_TO_TIMEFRAME
-from ..mt5_client.models import MarketOrderRequest
-from ..risk.engine import RiskEngine
+from ..mt5_client.enums import NAME_TO_TIMEFRAME, OrderSide, Timeframe
+from ..mt5_client.errors import MT5Error
+from ..mt5_client.models import Account, MarketOrderRequest, Position, Side
+from ..risk.engine import GateResult, RiskEngine
+from ..risk.session import day_start
 from ..strategy.stops import analyze_symbol, plan_stops
 
 
@@ -40,7 +42,7 @@ class IndicatorView(BaseModel):
 
 class PlanView(BaseModel):
     symbol: str = ""
-    side: str = ""
+    side: Side | None = None
     volume: float = 0.0
     sl_pips: float = 0.0
     tp_pips: float = 0.0
@@ -55,10 +57,18 @@ class Toolkit:
         self._risk = risk
         self._journal = journal
 
-    def get_account(self) -> AccountSummary:
+    @property
+    def settings(self) -> Settings:
+        return self._settings
+
+    def _account_gate(self) -> tuple[Account, list[Position], GateResult]:
         account = self._client.account()
         positions = self._client.positions()
-        gate = self._risk.check_account(account, len(positions))
+        closed_today = self._client.closed_pnl_since(day_start(self._risk.utcnow()))
+        return account, positions, self._risk.check_account(account, len(positions), closed_today)
+
+    def get_account(self) -> AccountSummary:
+        account, positions, gate = self._account_gate()
         return AccountSummary(
             balance=account.balance,
             equity=account.equity,
@@ -80,101 +90,99 @@ class Toolkit:
             timeframe = NAME_TO_TIMEFRAME.get(name.upper())
             if timeframe is None:
                 continue
-            candles = self._client.candles(symbol, timeframe, 300)
-            view = analyze_symbol(candles)
+            view = analyze_symbol(self._client.candles(symbol, timeframe, 300))
             out.append(
                 IndicatorView(
-                    symbol=symbol, timeframe=name, trend=str(view["trend"]), rsi=view["rsi"],
-                    atr=view["atr"], bars=int(view["bars"]),
+                    symbol=symbol, timeframe=name, trend=view.trend, rsi=view.rsi, atr=view.atr, bars=view.bars
                 )
             )
         return out
 
     def check_conditions(self, symbol: str) -> PlanView:
-        account = self._client.account()
-        positions = self._client.positions()
-        gate = self._risk.check_account(account, len(positions))
+        _, positions, gate = self._account_gate()
         if not gate.allowed:
             return PlanView(symbol=symbol, allowed=False, reason=gate.reason)
-        timing = self._risk.check_timing(
-            self._risk.utcnow(),
-            len(self._journal.today_entries(self._risk.utcnow())),
-            self._journal.last_trade_time(),
-        )
+        now = self._risk.utcnow()
+        timing = self._risk.check_timing(now, len(self._journal.today_entries(now)), self._journal.last_trade_time())
         if not timing.allowed:
             return PlanView(symbol=symbol, allowed=False, reason=timing.reason)
         if any(p.symbol == symbol for p in positions):
             return PlanView(symbol=symbol, allowed=False, reason=f"Position already open on {symbol}")
         return PlanView(symbol=symbol, allowed=True, reason="Conditions passed")
 
-    def plan_trade(self, symbol: str, side: str) -> Candidate:
+    def plan_trade(self, symbol: str, side: Side) -> Candidate:
         candidate = Candidate(symbol=symbol, side=side)
         spec = self._client.symbol(symbol)
-        timeframe = NAME_TO_TIMEFRAME.get("H1")
-        if timeframe is None:
-            candidate.block_reason = "H1 timeframe missing"
-            return candidate
-        candles = self._client.candles(symbol, timeframe, 300)
+        candles = self._client.candles(symbol, Timeframe.H1, 300)
         stops = plan_stops(
             candles, spec, side,
             atr_mult=self._settings.atr_mult, min_rr=self._settings.min_rr,
-            min_sl_pips=self._settings.min_sl_pips,
+            min_sl_pips=self._settings.min_sl_pips, commission_per_lot=self._settings.commission_per_lot,
         )
         if stops is None:
-            candidate.block_reason = "Not enough data for stops"
+            candidate.block_reason = f"Not enough H1 data for stops ({len(candles)} bars)"
             return candidate
+        candidate.stops = stops
         account = self._client.account()
-        sl_dist = abs(
-            (spec.ask if side == "BUY" else spec.bid) - stops.sl_price
-        )
-        volume = self._risk.size_volume(account.equity, sl_dist, spec)
-        volume = self._client.normalize_volume(spec, volume)
-        candidate.sl_pips = stops.sl_pips
-        candidate.tp_pips = stops.tp_pips
-        candidate.sl_price = stops.sl_price
-        candidate.tp_price = stops.tp_price
-        candidate.volume = volume
+        sizing = self._risk.size_volume(account.equity, abs(stops.entry - stops.sl_price), spec)
+        candidate.sizing_reason = sizing.reason
+        if not sizing.allowed:
+            candidate.block_reason = sizing.reason
+            return candidate
+        order_side = OrderSide.BUY if side == "BUY" else OrderSide.SELL
+        required = self._client.margin_for(symbol, order_side, sizing.volume, stops.entry)
+        margin = self._risk.check_margin(account, required)
+        if not margin.allowed:
+            candidate.block_reason = margin.reason
+            return candidate
+        candidate.volume = sizing.volume
         return candidate
 
     def validate_setup(self, candidate: Candidate) -> PlanView:
+        if candidate.block_reason or candidate.stops is None:
+            reason = candidate.block_reason or "No stop plan"
+            return PlanView(symbol=candidate.symbol, side=candidate.side, allowed=False, reason=reason)
         spec = self._client.symbol(candidate.symbol)
         trends = {tf: "UNKNOWN" for tf in ("H1", "H4", "D1")}
         for name in self._settings.timeframe_list:
             timeframe = NAME_TO_TIMEFRAME.get(name.upper())
             if timeframe is None or name not in trends:
                 continue
-            candles = self._client.candles(candidate.symbol, timeframe, 300)
-            trends[name] = str(analyze_symbol(candles)["trend"])
-        gate = self._risk.check_setup(
-            spec, candidate.side, candidate.sl_pips, candidate.tp_pips,
-            trends.get("H1", "UNKNOWN"), trends.get("H4", "UNKNOWN"), trends.get("D1", "UNKNOWN"),
-        )
-        candidate.trend_h1 = trends.get("H1", "UNKNOWN")
-        candidate.trend_h4 = trends.get("H4", "UNKNOWN")
-        candidate.trend_d1 = trends.get("D1", "UNKNOWN")
+            trends[name] = analyze_symbol(self._client.candles(candidate.symbol, timeframe, 300)).trend
+        gate = self._risk.check_setup(spec, candidate.side, candidate.stops, trends["H1"], trends["H4"], trends["D1"])
+        candidate.trend_h1 = trends["H1"]
+        candidate.trend_h4 = trends["H4"]
+        candidate.trend_d1 = trends["D1"]
         return PlanView(
             symbol=candidate.symbol, side=candidate.side, volume=candidate.volume,
-            sl_pips=candidate.sl_pips, tp_pips=candidate.tp_pips,
+            sl_pips=candidate.stops.sl_pips, tp_pips=candidate.stops.tp_pips,
             allowed=gate.allowed, reason=gate.reason,
         )
 
-    def place_order(self, candidate: Candidate, dry_run: bool) -> str:
+    def place_order(self, decision: TradeDecision, dry_run: bool) -> str:
         if dry_run:
             return "paper: order not sent"
-        spec = self._client.symbol(candidate.symbol)
+        if decision.action != "EXECUTE" or decision.side is None:
+            raise ValueError(f"Refusing to send a {decision.action} decision without a side")
+        spec = self._client.symbol(decision.symbol)
         order = MarketOrderRequest(
-            symbol=candidate.symbol, side=candidate.side, volume=candidate.volume,
-            sl_price=candidate.sl_price, tp_price=candidate.tp_price,
+            symbol=decision.symbol, side=decision.side, volume=decision.volume,
+            sl_price=decision.sl_price, tp_price=decision.tp_price,
             magic=self._settings.magic_number,
         )
         result = self._client.send_market(order, spec)
-        return f"order={result.order} deal={result.deal} price={result.price}"
+        if not result.ok:
+            raise MT5Error(f"order not confirmed: {result.comment}", retcode=result.retcode)
+        return f"order sent: order={result.order} deal={result.deal} price={result.price} retcode={result.retcode}"
 
-    def log_decision(self, symbol: str, action: str, reason: str, dry_run: bool) -> None:
-        from ..journal.store import JournalEntry
-
+    def log_decision(self, decision: TradeDecision) -> None:
+        reason = f"{decision.reason} | {decision.outcome}" if decision.outcome else decision.reason
         self._journal.append(
-            JournalEntry(symbol=symbol, action=action, reason=reason, dry_run=dry_run)
+            JournalEntry(
+                symbol=decision.symbol, action=decision.action, side=decision.side or "",
+                volume=decision.volume, reason=reason, sl_pips=decision.sl_pips,
+                tp_pips=decision.tp_pips, dry_run=decision.dry_run,
+            )
         )
 
 
@@ -187,7 +195,7 @@ def langchain_tools(toolkit: Toolkit) -> list[Any]:
 
     class PlanIn(BaseModel):
         symbol: str = Field(min_length=1)
-        side: str = "BUY"
+        side: Side = "BUY"
 
     return [
         StructuredTool.from_function(
@@ -226,7 +234,7 @@ def langchain_tools(toolkit: Toolkit) -> list[Any]:
             name="log_decision", description="Record the final decision.",
         ),
         StructuredTool.from_function(
-            func=lambda: f"{toolkit._settings.symbol_list}",
+            func=lambda: f"{toolkit.settings.symbol_list}",
             name="list_symbols", description="Configured trading universe.",
         ),
     ]

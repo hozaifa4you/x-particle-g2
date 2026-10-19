@@ -1,12 +1,13 @@
+import math
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from ..config import Settings
-from .enums import FillingMode, OrderSide, Retcode, Timeframe, TradeAction
+from .enums import DealType, FillingMode, OrderSide, Retcode, Timeframe, TradeAction
 from .errors import MT5Error
-from .models import Account, Candle, MarketOrderRequest, OrderResult, Position, Quote, SymbolSpec
+from .models import Account, Candle, MarketOrderRequest, OrderResult, Position, Quote, Side, SymbolSpec
 from .rates import epoch_to_utc, rows_to_candles
 
 
@@ -24,6 +25,7 @@ class TerminalBackend(Protocol):
     def order_send(self, request: dict[str, Any]) -> Any: ...
     def positions_get(self, *args: Any, **kwargs: Any) -> Any: ...
     def order_calc_margin(self, *args: Any) -> Any: ...
+    def history_deals_get(self, date_from: int, date_to: int) -> Any: ...
     def login(self, *args: Any, **kwargs: Any) -> bool: ...
 
 
@@ -106,7 +108,9 @@ class MT5Client:
                 raise MT5Error(f"Symbol {name} is not visible")
             data = info._asdict() if hasattr(info, "_asdict") else dict(info)
         tick = self.quote(name)
-        return SymbolSpec(
+        if tick.bid <= 0 or tick.ask <= 0 or tick.ask < tick.bid:
+            raise MT5Error(f"No live quote for {name}: bid={tick.bid} ask={tick.ask}")
+        spec = SymbolSpec(
             name=str(data.get("name", name)),
             digits=int(data.get("digits", 5)),
             point=float(data.get("point", 0.00001)),
@@ -119,7 +123,23 @@ class MT5Client:
             tick_value=float(data.get("trade_tick_value", data.get("tick_value", 1.0))),
             tick_size=float(data.get("trade_tick_size", data.get("tick_size", 0.00001))),
             filling_mode=int(data.get("filling_mode", 2)),
+            pip_size=self._pip_override(name),
         )
+        if spec.tick_value <= 0 or spec.tick_size <= 0:
+            raise MT5Error(f"No tick value for {name}: value={spec.tick_value} size={spec.tick_size}")
+        return spec
+
+    def watch(self, names: list[str]) -> None:
+        # A symbol outside Market Watch returns a zero tick until the terminal starts streaming it.
+        backend = self._need_open()
+        for name in names:
+            if not backend.symbol_select(name, True):
+                raise MT5Error(f"Cannot select symbol {name}", last_error=backend.last_error())
+
+    def _pip_override(self, name: str) -> float:
+        overrides = self._settings.pip_override_map
+        matches = [prefix for prefix in overrides if name.upper().startswith(prefix)]
+        return overrides[max(matches, key=len)] if matches else 0.0
 
     def quote(self, name: str) -> Quote:
         backend = self._need_open()
@@ -154,7 +174,7 @@ class MT5Client:
         out: list[Position] = []
         for item in raw:
             data = item._asdict() if hasattr(item, "_asdict") else dict(item)
-            side = "BUY" if int(data.get("type", 0)) == 0 else "SELL"
+            side: Side = "BUY" if int(data.get("type", 0)) == int(OrderSide.BUY) else "SELL"
             out.append(
                 Position(
                     ticket=int(data.get("ticket", 0)),
@@ -171,11 +191,31 @@ class MT5Client:
             )
         return out
 
+    def closed_pnl_since(self, start: datetime) -> float:
+        backend = self._need_open()
+        # The window runs a day past now because deal times use the broker's server clock.
+        until = datetime.now(UTC) + timedelta(days=1)
+        deals = backend.history_deals_get(int(start.timestamp()), int(until.timestamp()))
+        if deals is None:
+            raise MT5Error("history_deals_get failed", last_error=backend.last_error())
+        total = 0.0
+        for deal in deals:
+            data = deal._asdict() if hasattr(deal, "_asdict") else dict(deal)
+            if int(data.get("type", -1)) not in (DealType.BUY, DealType.SELL):
+                continue
+            total += sum(float(data.get(key, 0.0)) for key in ("profit", "commission", "swap", "fee"))
+        return total
+
     def normalize_volume(self, spec: SymbolSpec, volume: float) -> float:
-        step = spec.volume_step if spec.volume_step > 0 else 0.01
-        clamped = min(max(volume, spec.volume_min), spec.volume_max)
-        steps = round(clamped / step)
-        return round(max(steps * step, spec.volume_min), 8)
+        if spec.volume_step <= 0:
+            raise MT5Error(f"{spec.name} has no volume step")
+        capped = min(volume, spec.volume_max)
+        # Floor, never round up: rounding up would risk more than the engine approved.
+        steps = math.floor(capped / spec.volume_step + 1e-9)
+        normalized = round(steps * spec.volume_step, 8)
+        if normalized < spec.volume_min:
+            raise MT5Error(f"Volume {volume} is below the {spec.name} minimum {spec.volume_min}")
+        return normalized
 
     def filling_for(self, spec: SymbolSpec) -> FillingMode:
         mode = spec.filling_mode
@@ -190,7 +230,7 @@ class MT5Client:
 
     def send_market(self, order: MarketOrderRequest, spec: SymbolSpec) -> OrderResult:
         backend = self._need_open()
-        side = OrderSide.BUY if order.side.upper() == "BUY" else OrderSide.SELL
+        side = OrderSide.BUY if order.side == "BUY" else OrderSide.SELL
         quote = self.quote(order.symbol)
         price = quote.ask if side == OrderSide.BUY else quote.bid
         volume = self.normalize_volume(spec, order.volume)
@@ -285,7 +325,7 @@ class MT5Client:
         except Exception as exc:
             raise MT5Error(f"margin calc failed: {exc}") from exc
         if value is None:
-            return 0.0
+            raise MT5Error(f"margin calc returned nothing for {symbol}", last_error=backend.last_error())
         return float(value)
 
 
@@ -297,8 +337,3 @@ def mt5_session(settings: Settings, backend: TerminalBackend | None = None) -> I
         yield client
     finally:
         client.close()
-
-
-def _unused_datetime() -> datetime:
-
-    return datetime.now(UTC)

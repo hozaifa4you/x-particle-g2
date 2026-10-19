@@ -1,6 +1,9 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
+
+Side = Literal["BUY", "SELL"]
 
 
 class Frozen(BaseModel):
@@ -46,13 +49,21 @@ class SymbolSpec(Frozen):
     tick_value: float = 1.0
     tick_size: float = 0.00001
     filling_mode: int = 2
+    pip_size: float = 0.0
 
-    def pips_per_price(self) -> float:
-        pip = self.point * 10
-        return pip if pip > 0 else self.point
+    def pip(self) -> float:
+        if self.pip_size > 0:
+            return self.pip_size
+        # Fractional quotes (3/5 digits) carry an extra decimal, so one pip is ten points.
+        return self.point * 10 if self.digits in (3, 5) else self.point
+
+    def point_value(self) -> float:
+        if self.tick_size <= 0:
+            return 0.0
+        return self.tick_value * self.point / self.tick_size
 
     def spread_pips(self) -> float:
-        return (self.ask - self.bid) / self.pips_per_price() if self.ask > self.bid else 0.0
+        return (self.ask - self.bid) / self.pip() if self.ask > self.bid else 0.0
 
 
 class Candle(Frozen):
@@ -67,7 +78,7 @@ class Candle(Frozen):
 class Position(Frozen):
     ticket: int = 0
     symbol: str = ""
-    side: str = "BUY"
+    side: Side = "BUY"
     volume: float = 0.0
     price_open: float = 0.0
     price_current: float = 0.0
@@ -79,7 +90,7 @@ class Position(Frozen):
 
 class MarketOrderRequest(BaseModel):
     symbol: str = Field(min_length=1)
-    side: str = "BUY"
+    side: Side = "BUY"
     volume: float = Field(gt=0, le=1000)
     sl_price: float = 0.0
     tp_price: float = 0.0

@@ -4,7 +4,7 @@ from ..mt5_client.enums import NAME_TO_TIMEFRAME
 from ..strategy.stops import analyze_symbol
 
 
-def summarize(symbol: str = "EURUSDm", timeframe: str = "H1", count: int = 500) -> str:
+def summarize(symbol: str = "EURUSD", timeframe: str = "H1", count: int = 500) -> str:
     frame = NAME_TO_TIMEFRAME.get(timeframe.upper())
     if frame is None:
         return f"Unknown timeframe {timeframe}"
@@ -17,8 +17,10 @@ def summarize(symbol: str = "EURUSDm", timeframe: str = "H1", count: int = 500) 
         return f"Not enough bars for {symbol} {timeframe}: {len(candles)}"
     view = analyze_symbol(candles)
     wins = sum(1 for c in candles[-100:] if c.close > c.open)
+    rsi = f"{view.rsi:.1f}" if view.rsi is not None else "n/a"
+    atr = f"{view.atr:.5f}" if view.atr is not None else "n/a"
     return (
         f"Backtest {symbol} {timeframe} bars={len(candles)} "
-        f"trend={view['trend']} rsi={view['rsi']:.1f} atr={view['atr']:.5f} "
+        f"trend={view.trend} rsi={rsi} atr={atr} "
         f"last100 up={wins}/100. Live paper trading still required before real orders."
     )

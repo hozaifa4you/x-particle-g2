@@ -52,6 +52,12 @@ NAME_TO_TIMEFRAME: dict[str, Timeframe] = {
 }
 
 
+class DealType(IntEnum):
+    BUY = 0
+    SELL = 1
+    BALANCE = 2
+
+
 class FillingMode(IntEnum):
     FOK = 0
     IOC = 1
