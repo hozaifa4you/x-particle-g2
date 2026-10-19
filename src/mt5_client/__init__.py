@@ -1,12 +1,13 @@
 from .client import MT5Client, TerminalBackend, mt5_session
-from .enums import FillingMode, OrderSide, OrderType, Retcode, Timeframe
+from .enums import DealType, FillingMode, OrderSide, OrderType, Retcode, Timeframe
 from .errors import MT5Error
-from .models import Account, Candle, MarketOrderRequest, OrderResult, Position, Quote, SymbolSpec
+from .models import Account, Candle, MarketOrderRequest, OrderResult, Position, Quote, Side, SymbolSpec
 from .rates import rows_to_candles
 
 __all__ = [
     "Account",
     "Candle",
+    "DealType",
     "FillingMode",
     "MarketOrderRequest",
     "MT5Client",
@@ -17,6 +18,7 @@ __all__ = [
     "Position",
     "Quote",
     "Retcode",
+    "Side",
     "SymbolSpec",
     "TerminalBackend",
     "Timeframe",

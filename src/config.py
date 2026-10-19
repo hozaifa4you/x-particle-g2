@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,11 +30,23 @@ class Settings(BaseSettings):
     max_spread_pips: float = 5.0
     min_sl_pips: float = 10.0
     atr_mult: float = 2.0
+    commission_per_lot: float = 0.0
+    pip_overrides: str = "XAU=0.1"
     off_days: str = "Saturday,Sunday"
     friday_cutoff_hour: int = 14
 
     journal_path: str = "logs/trade_history.jsonl"
     log_level: str = "INFO"
+
+    @field_validator("pip_overrides")
+    @classmethod
+    def _check_pip_overrides(cls, value: str) -> str:
+        parse_pip_overrides(value)
+        return value
+
+    @property
+    def pip_override_map(self) -> dict[str, float]:
+        return parse_pip_overrides(self.pip_overrides)
 
     @property
     def symbol_list(self) -> list[str]:
@@ -46,6 +59,23 @@ class Settings(BaseSettings):
     @property
     def off_day_list(self) -> list[str]:
         return [d.strip() for d in self.off_days.split(",") if d.strip()]
+
+
+def parse_pip_overrides(raw: str) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for item in raw.split(","):
+        if not item.strip():
+            continue
+        prefix, _, size = item.partition("=")
+        problem = f"PIP_OVERRIDES entry {item.strip()!r} must look like PREFIX=0.1"
+        try:
+            value = float(size)
+        except ValueError as err:
+            raise ValueError(problem) from err
+        if not prefix.strip() or value <= 0:
+            raise ValueError(problem)
+        out[prefix.strip().upper()] = value
+    return out
 
 
 settings = Settings()

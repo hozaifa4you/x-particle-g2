@@ -28,7 +28,7 @@ Flow: `main.py` (typer CLI) loads `src/config.py` (pydantic-settings), opens `mt
 - `src/config.py` — all tunables. No magic numbers elsewhere; read limits from `Settings`.
 - `src/mt5_client/` — the only layer that imports `mt5_wrapper`. Exposes `MT5Client`, `mt5_session()`, frozen Pydantic models, `IntEnum` constants, `MT5Error`, and `rows_to_candles()` (numpy void → `list[Candle]`, empty → `[]`).
 - `src/strategy/` — pure functions on `list[Candle]`: EMA, RSI, MACD, ATR, Bollinger, support/resistance, `plan_stops()`. No network, no filesystem.
-- `src/risk/` — `RiskEngine` (`size_volume`, `check_account`, `check_timing`, `check_setup`) plus session helpers. Tick-value sizing, spread-adjusted reward, margin/drawdown/cooldown/session gates.
+- `src/risk/` — `RiskEngine` (`size_volume`, `check_account`, `check_timing`, `check_setup`) plus session helpers. Tick-value sizing floored to the lot step, commission-adjusted reward, post-entry margin, closed-plus-open daily loss, cooldown/session gates.
 - `src/tools/trading_tools.py` — `Toolkit` plus at most eight LangChain `StructuredTool`s. Tools report; they do not authorize.
 - `src/agent/` — `state.py` (`TradeDecision`, `AgentState`), `prompt.py` (`build_system_prompt()`), `graph.py` (five nodes), `runner.py` (`run_once()` with offline `NO_TRADE` fallback).
 - `src/journal/store.py` — JSONL append, `today_entries()`, `last_trade_time()`. The sole source for daily counts and cooldowns.
@@ -37,7 +37,7 @@ Flow: `main.py` (typer CLI) loads `src/config.py` (pydantic-settings), opens `mt
 
 ## 5. Conservative risk rules (enforced in code)
 
-1% per trade, 3 trades/day, 60 minutes apart, 2 positions max, 1:2 minimum reward, ATR×2 stops floored at 10 pips and 3× spread, 5-pip spread cap, 200% margin floor, 3% daily-loss kill switch, no off-day or post-14:00 Friday trading, H1/H4/D1 must agree. Changing any number means updating `src/config.py`, `.env.example`, `README.md`, and the tests that pin it.
+1% per trade (refuse when the minimum lot exceeds it), 3 trades/day, 60 minutes apart, 2 positions max, 1:2 minimum reward net of commission, ATR×2 stops floored at 10 pips and 3× spread, 5-pip spread cap (pip size per `PIP_OVERRIDES`), 200% margin floor after entry, 3% daily-loss kill switch on closed plus open P/L, no off-day or post-14:00 Friday trading, H1/H4/D1 must agree. Changing any number means updating `src/config.py`, `.env.example`, `README.md`, and the tests that pin it.
 
 ## 6. How to write code here
 

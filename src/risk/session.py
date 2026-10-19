@@ -1,10 +1,14 @@
-from datetime import datetime
+from datetime import datetime, time
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
 def weekday_name(when: datetime) -> str:
     return WEEKDAYS[when.weekday()]
+
+
+def day_start(when: datetime) -> datetime:
+    return datetime.combine(when.date(), time.min, tzinfo=when.tzinfo)
 
 
 def is_off_day(when: datetime, off_days: list[str]) -> bool:

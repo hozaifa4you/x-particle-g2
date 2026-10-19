@@ -1,11 +1,20 @@
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ..tools.trading_tools import Toolkit
+import structlog
+
+from ..config import Settings
+from ..mt5_client.errors import MT5Error
 from .prompt import build_system_prompt
-from .state import AgentState, TradeDecision
+from .state import AgentState, Candidate, TradeDecision
+
+if TYPE_CHECKING:
+    # Runtime import would cycle: trading_tools imports agent.state, which loads this package.
+    from ..tools.trading_tools import Toolkit
+
+log = structlog.get_logger("x-particle")
 
 
-def build_graph(toolkit: Toolkit, symbols: list[str], dry_run: bool) -> Any:
+def build_graph(toolkit: "Toolkit", symbols: list[str], dry_run: bool) -> Any:
     from langgraph.graph import END, StateGraph
 
     def health(state: AgentState) -> dict[str, Any]:
@@ -31,30 +40,29 @@ def build_graph(toolkit: Toolkit, symbols: list[str], dry_run: bool) -> Any:
         return {"candidates": found, "notes": notes}
 
     def validate(state: AgentState) -> dict[str, Any]:
-
         notes = list(state.get("notes", []))
-        best: dict[str, Any] | None = None
+        best: Candidate | None = None
         for item in state.get("candidates", []):
-            candidate = toolkit.plan_trade(item["symbol"], item["side"])
-            candidate.trend_h1 = item.get("H1", "UNKNOWN")
-            candidate.trend_h4 = item.get("H4", "UNKNOWN")
-            candidate.trend_d1 = item.get("D1", "UNKNOWN")
-            check = toolkit.check_conditions(candidate.symbol)
-            if not check.allowed:
-                notes.append(f"{candidate.symbol}: {check.reason}")
+            symbol = item["symbol"]
+            try:
+                check = toolkit.check_conditions(symbol)
+                if not check.allowed:
+                    notes.append(f"{symbol}: {check.reason}")
+                    continue
+                candidate = toolkit.plan_trade(symbol, item["side"])
+                verdict = toolkit.validate_setup(candidate)
+            except MT5Error as exc:
+                notes.append(f"{symbol}: {exc}")
                 continue
-            verdict = toolkit.validate_setup(candidate)
             if not verdict.allowed:
-                notes.append(f"{candidate.symbol}: {verdict.reason}")
+                notes.append(f"{symbol}: {verdict.reason}")
                 continue
-            best = candidate.model_dump()
-            notes.append(f"{candidate.symbol}: setup passed")
+            best = candidate
+            notes.append(f"{symbol}: setup passed, {candidate.sizing_reason}")
             break
-        return {"decision": best or {}, "notes": notes}
+        return {"decision": best.model_dump() if best else {}, "notes": notes}
 
     def decide(state: AgentState) -> dict[str, Any]:
-        from .state import TradeDecision
-
         notes = list(state.get("notes", []))
         picked = state.get("decision") or {}
         if not picked:
@@ -62,32 +70,28 @@ def build_graph(toolkit: Toolkit, symbols: list[str], dry_run: bool) -> Any:
                 action="NO_TRADE", reason="; ".join(notes[-4:]) or "No aligned setup", dry_run=dry_run
             )
         else:
+            candidate = Candidate.model_validate(picked)
+            stops = candidate.stops
+            if stops is None:
+                raise ValueError(f"{candidate.symbol} passed validation without a stop plan")
             choice = TradeDecision(
-                action="EXECUTE", symbol=picked["symbol"], side=picked["side"],
-                volume=picked["volume"], sl_pips=picked["sl_pips"], tp_pips=picked["tp_pips"],
-                reason="Multi-timeframe alignment with validated risk", dry_run=dry_run,
+                action="EXECUTE", symbol=candidate.symbol, side=candidate.side, volume=candidate.volume,
+                sl_pips=stops.sl_pips, tp_pips=stops.tp_pips, sl_price=stops.sl_price, tp_price=stops.tp_price,
+                reason=f"Multi-timeframe alignment with validated risk ({candidate.sizing_reason})",
+                dry_run=dry_run,
             )
-        refined = _llm_refine(symbols, notes, choice)
+        refined = _llm_refine(toolkit.settings, symbols, notes, choice)
         return {"decision": refined.model_dump(), "notes": notes}
 
     def execute(state: AgentState) -> dict[str, Any]:
-        from .state import Candidate, TradeDecision
-
         notes = list(state.get("notes", []))
         choice = TradeDecision.model_validate(state.get("decision", {}))
-        if choice.action == "EXECUTE" and not dry_run:
-            candidate = Candidate(
-                symbol=choice.symbol, side=choice.side, volume=choice.volume,
-                sl_pips=choice.sl_pips, tp_pips=choice.tp_pips,
-                sl_price=0.0, tp_price=0.0,
-            )
-            planned = toolkit.plan_trade(candidate.symbol, candidate.side)
-            candidate.sl_price = planned.sl_price
-            candidate.tp_price = planned.tp_price
-            outcome = toolkit.place_order(candidate, dry_run=False)
-            notes.append(outcome)
-        toolkit.log_decision(choice.symbol, choice.action, choice.reason, dry_run)
-        return {"notes": notes}
+        if choice.action == "EXECUTE":
+            # Send the exact validated prices; re-planning here would detach the stop from the sized volume.
+            choice.outcome = toolkit.place_order(choice, dry_run=dry_run)
+            notes.append(choice.outcome)
+        toolkit.log_decision(choice)
+        return {"decision": choice.model_dump(), "notes": notes}
 
     builder = StateGraph(AgentState)
     builder.add_node("health", health)
@@ -104,10 +108,8 @@ def build_graph(toolkit: Toolkit, symbols: list[str], dry_run: bool) -> Any:
     return builder.compile()
 
 
-def _llm_refine(symbols: list[str], notes: list[str], fallback: TradeDecision) -> TradeDecision:
-    from ..config import settings
-
-    if not settings.openrouter_api_key:
+def _llm_refine(active: Settings, symbols: list[str], notes: list[str], fallback: TradeDecision) -> TradeDecision:
+    if not active.openrouter_api_key:
         return fallback
     try:
         from typing import Literal
@@ -119,26 +121,29 @@ def _llm_refine(symbols: list[str], notes: list[str], fallback: TradeDecision) -
             action: Literal["EXECUTE", "NO_TRADE"]
             reason: str
 
+        # Meta's provider rejects forced tool_choice, which function_calling needs; json_schema avoids it.
         llm = ChatOpenRouter(
-            api_key=SecretStr(settings.openrouter_api_key),
-            model=settings.openrouter_model,
+            api_key=SecretStr(active.openrouter_api_key),
+            model=active.openrouter_model,
             temperature=0,
-        ).with_structured_output(DecisionSchema)
+        ).with_structured_output(DecisionSchema, method="json_schema")
         prompt = build_system_prompt(symbols) + "\nNotes:\n" + "\n".join(notes[-12:])
         answer = llm.invoke(prompt)
-        if isinstance(answer, dict):
-            raw_action = answer.get("action", fallback.action)
-            raw_reason = answer.get("reason", fallback.reason)
-        else:
-            raw_action = getattr(answer, "action", fallback.action)
-            raw_reason = getattr(answer, "reason", fallback.reason)
-        action = str(raw_action)
-        reason = str(raw_reason)
-        if action == "NO_TRADE":
-            fallback.action = "NO_TRADE"
-            fallback.reason = reason
-        else:
-            fallback.reason = f"{fallback.reason} | LLM: {reason}"
+    except Exception as exc:
+        # The LLM only advises; the deterministic decision stands, but the failure must stay visible.
+        log.warning("llm_refine_failed", error=type(exc).__name__, detail=str(exc)[:200])
+        fallback.reason = f"{fallback.reason} | LLM skipped: {type(exc).__name__}"
         return fallback
-    except Exception:
-        return fallback
+    if isinstance(answer, dict):
+        raw_action = answer.get("action", fallback.action)
+        raw_reason = answer.get("reason", fallback.reason)
+    else:
+        raw_action = getattr(answer, "action", fallback.action)
+        raw_reason = getattr(answer, "reason", fallback.reason)
+    # The engine's reason always survives verbatim; LLM prose may paraphrase checks that never ran.
+    if str(raw_action) == "NO_TRADE" and fallback.action == "EXECUTE":
+        fallback.action = "NO_TRADE"
+        fallback.reason = f"LLM veto: {raw_reason} | engine: {fallback.reason}"
+    else:
+        fallback.reason = f"{fallback.reason} | LLM: {raw_reason}"
+    return fallback

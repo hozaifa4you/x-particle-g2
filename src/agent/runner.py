@@ -2,10 +2,9 @@ import structlog
 
 from ..config import Settings, settings
 from ..journal.store import Journal, JournalEntry
-from ..mt5_client.client import mt5_session
+from ..mt5_client.client import TerminalBackend, mt5_session
 from ..mt5_client.errors import MT5Error
 from ..risk.engine import RiskEngine
-from ..tools.trading_tools import Toolkit
 from .graph import build_graph
 from .state import TradeDecision
 
@@ -16,13 +15,18 @@ def run_once(
     symbols: list[str] | str | None = None,
     dry_run: bool | None = None,
     active: Settings | None = None,
+    backend: TerminalBackend | None = None,
 ) -> TradeDecision:
     active = active or settings
     names = _symbol_list(symbols, active)
     dry = active.dry_run if dry_run is None else dry_run
     journal = Journal(active.journal_path)
+    # Imported here: trading_tools imports agent.state, and this package's __init__ loads the runner.
+    from ..tools.trading_tools import Toolkit
+
     try:
-        with mt5_session(active) as client:
+        with mt5_session(active, backend=backend) as client:
+            client.watch(names)
             toolkit = Toolkit(client, active, RiskEngine(active), journal)
             graph = build_graph(toolkit, names, dry)
             result = graph.invoke({"symbols": names, "dry_run": dry}, {"recursion_limit": 25})

@@ -2,11 +2,11 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class JournalEntry(BaseModel):
-    time: datetime = datetime.now(UTC)
+    time: datetime = Field(default_factory=lambda: datetime.now(UTC))
     symbol: str = ""
     action: str = "NO_TRADE"
     side: str = ""
